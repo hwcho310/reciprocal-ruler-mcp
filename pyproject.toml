@@ -28,9 +28,9 @@ dependencies = []
 dev = ["pytest>=8.0"]
 
 [project.urls]
-Homepage = "https://reciprocla-ruler-x402.onrender.com"
-Documentation = "https://reciprocla-ruler-x402.onrender.com/docs"
-Source = "https://reciprocla-ruler-x402.onrender.com"
+Homepage = "https://reciprocal-ruler-x402.vercel.app"
+Documentation = "https://reciprocal-ruler-x402.vercel.app/docs"
+Source = "https://reciprocal-ruler-x402.vercel.app"
 
 [project.scripts]
 reciprocal-ruler-mcp = "reciprocal_ruler_mcp.server:main"

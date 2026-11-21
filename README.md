@@ -10,7 +10,7 @@ the settlement afterwards (`SETTLED_OK`, `COMPENSATED`, `PENDING_RECONCILIATION`
 shortfalls out of the agreed holdback. The service is paid per call with
 [x402](https://www.x402.org) in USDC on Base — no account, no API key, no invoice.
 
-- API: <https://reciprocla-ruler-x402.onrender.com> · OpenAPI docs: `/docs`
+- API: <https://reciprocal-ruler-x402.vercel.app> · OpenAPI docs: `/docs`
 - Free trial: **3 evaluation calls per client**, no payment, no signup
 - Standard library only — the server has **no third-party dependencies**
 
@@ -64,7 +64,7 @@ Example payment summary from a 402 response:
     "amount_atomic": "50000",
     "amount_usdc": "0.050000",
     "pay_to": "0x…",
-    "resource_url": "https://reciprocla-ruler-x402.onrender.com/v1/quote-lock"
+    "resource_url": "https://reciprocal-ruler-x402.vercel.app/v1/quote-lock"
   },
   "how_to_pay": ["…"]
 }
@@ -97,7 +97,7 @@ server speaks MCP over **stdio**.
       "command": "python3",
       "args": ["-m", "reciprocal_ruler_mcp"],
       "env": {
-        "RULER_API_BASE": "https://reciprocla-ruler-x402.onrender.com",
+        "RULER_API_BASE": "https://reciprocal-ruler-x402.vercel.app",
         "RULER_TRIAL_CLIENT_ID": "my-agent-01"
       }
     }
@@ -135,7 +135,7 @@ The server is a single standard-library module, so a checkout works directly:
 
 | Environment variable | Default | Purpose |
 |---|---|---|
-| `RULER_API_BASE` | `https://reciprocla-ruler-x402.onrender.com` | API base URL (point it at a local or self-hosted instance if you run one). |
+| `RULER_API_BASE` | `https://reciprocal-ruler-x402.vercel.app` | API base URL (point it at a local or self-hosted instance if you run one). |
 | `RULER_TRIAL_CLIENT_ID` | *unset* | Sent as `X-Trial-Client` so your 3 free calls follow this agent id instead of the shared IP address. Recommended behind a NAT or shared proxy. |
 | `RULER_TIMEOUT_SECONDS` | `90` | Per-request timeout. The free hosting tier sleeps when idle, so the first call of a session may need a warm-up; the client retries once on a network failure. |
 

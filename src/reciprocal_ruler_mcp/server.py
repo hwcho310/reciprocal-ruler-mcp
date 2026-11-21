@@ -31,7 +31,7 @@ from urllib import request as urlrequest
 
 SERVER_NAME = "reciprocal-ruler"
 SERVER_VERSION = "0.1.0"
-DEFAULT_API_BASE = "https://reciprocla-ruler-x402.onrender.com"
+DEFAULT_API_BASE = "https://reciprocal-ruler-x402.vercel.app"
 DEFAULT_TIMEOUT_SECONDS = 90.0
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07")
 LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
