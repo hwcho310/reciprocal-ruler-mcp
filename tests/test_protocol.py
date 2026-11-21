@@ -253,7 +253,13 @@ def test_notification_gets_no_reply_and_ping_does(client):
 
 def test_tools_list_has_the_three_tools_with_valid_schemas(client):
     tools = client.request("tools/list")["result"]["tools"]
-    assert [tool["name"] for tool in tools] == ["ruler_trial_reconcile", "ruler_quote_lock", "ruler_reconcile"]
+    assert [tool["name"] for tool in tools] == [
+        "ruler_trial_verify_math",
+        "ruler_verify_math",
+        "ruler_trial_reconcile",
+        "ruler_quote_lock",
+        "ruler_reconcile",
+    ]
     for tool in tools:
         assert tool["description"]
         schema = tool["inputSchema"]

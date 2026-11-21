@@ -4,9 +4,11 @@
 A stdio Model Context Protocol server that exposes the Reciprocal Ruler x402 API
 to any MCP-capable agent (Claude Desktop, Claude Code, Cursor, ...):
 
-  * ruler_trial_reconcile - free settlement reconciliation (3 calls per client)
-  * ruler_quote_lock      - paid x402 quote lock ($0.05, USDC on Base)
-  * ruler_reconcile       - paid x402 settlement reconciliation ($0.25, USDC on Base)
+  * ruler_trial_verify_math - free arithmetic check (3 calls per client)
+  * ruler_verify_math       - paid x402 arithmetic check ($0.01, USDC on Base)
+  * ruler_trial_reconcile   - free settlement reconciliation (3 calls per client)
+  * ruler_quote_lock        - paid x402 quote lock ($0.05, USDC on Base)
+  * ruler_reconcile         - paid x402 settlement reconciliation ($0.25, USDC on Base)
 
 The paid tools return the decoded x402 payment challenge (PAYMENT-REQUIRED) with
 Base USDC instructions when no payment is supplied, so the calling agent can pay
@@ -316,6 +318,79 @@ def _judgment_note(body: Dict[str, Any]) -> str:
 # ==============================================================================
 # Tools
 # ==============================================================================
+def _verify_math_payload(args: Dict[str, Any]) -> Dict[str, Any]:
+    expected = args.get("expected_amount")
+    actual = args.get("actual_amount")
+    if isinstance(expected, bool) or not isinstance(expected, (int, float)):
+        raise ToolInputError("`expected_amount` is required and must be a number")
+    if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+        raise ToolInputError("`actual_amount` is required and must be a number")
+    tolerance = args.get("tolerance", 0.0)
+    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)) or tolerance < 0:
+        raise ToolInputError("`tolerance` must be a non-negative number")
+    currency = args.get("currency", "KRW")
+    if not isinstance(currency, str) or not currency.strip():
+        raise ToolInputError("`currency` must be a non-empty string")
+    return {
+        "expected_amount": float(expected),
+        "actual_amount": float(actual),
+        "tolerance": float(tolerance),
+        "currency": currency.strip(),
+    }
+
+
+def tool_ruler_trial_verify_math(args: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _verify_math_payload(args)
+    result = api_post("/v1/trial/verify-math", payload, _trial_headers(args))
+    if result.status == 200 and isinstance(result.body, dict):
+        body = result.body
+        return {
+            "ok": True,
+            "free_trial": True,
+            "http_status": 200,
+            "result": {
+                "status": body.get("status"),
+                "currency": body.get("currency"),
+                "expected_amount": body.get("expected_amount"),
+                "actual_amount": body.get("actual_amount"),
+                "delta": body.get("delta"),
+                "within_tolerance": body.get("within_tolerance"),
+                "judged_at": body.get("judged_at"),
+            },
+            "trial_usage": body.get("trial") or {},
+            "summary": f"Arithmetic check: {body.get('status')} (delta={body.get('delta')} {body.get('currency')}).",
+        }
+    if result.status == 402 and isinstance(result.body, dict) and result.body.get("error") == "TRIAL_EXHAUSTED":
+        return {
+            "ok": False,
+            "status": "TRIAL_EXHAUSTED",
+            "http_status": 402,
+            "message": result.body.get("message"),
+            "trial_usage": result.body.get("trial_usage"),
+            "paid_endpoints": result.body.get("paid_endpoints"),
+            "next_step": "Use ruler_verify_math ($0.01 USDC on Base) for further arithmetic checks.",
+        }
+    if result.status == 402:
+        return payment_required_result("ruler_trial_verify_math", "/v1/trial/verify-math", result)
+    return _unexpected("ruler_trial_verify_math", result)
+
+
+def tool_ruler_verify_math(args: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _verify_math_payload(args)
+    result = api_post("/v1/verify-math", payload, _payment_header(args))
+    if result.status == 200 and isinstance(result.body, dict):
+        body = result.body
+        return {
+            "ok": True,
+            "http_status": 200,
+            "result": body,
+            "summary": f"Arithmetic check: {body.get('status')} (delta={body.get('delta')} {body.get('currency')}).",
+        }
+    if result.status == 402:
+        return payment_required_result("ruler_verify_math", "/v1/verify-math", result)
+    return _unexpected("ruler_verify_math", result)
+
+
 def tool_ruler_trial_reconcile(args: Dict[str, Any]) -> Dict[str, Any]:
     payload = reconcile_payload(args, auto_idempotency=True)
     result = api_post("/v1/trial/reconcile", payload, _trial_headers(args))
@@ -419,6 +494,50 @@ def _unexpected(tool: str, result: ApiResult) -> Dict[str, Any]:
 
 
 TOOL_SPECS: List[Dict[str, Any]] = [
+    {
+        "name": "ruler_trial_verify_math",
+        "title": "Reciprocal Ruler - free trial arithmetic check",
+        "description": (
+            "Free trial of the $0.01 deterministic arithmetic check (up to 3 calls per client across trial tools). "
+            "Compares expected_amount vs actual_amount with optional tolerance and returns MATCHED, SHORTFALL, or OVERPAID."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "expected_amount": {"type": "number", "description": "Expected settlement or invoice amount."},
+                "actual_amount": {"type": "number", "description": "Actual settled or charged amount."},
+                "tolerance": {"type": "number", "minimum": 0, "default": 0.0,
+                              "description": "Allowed rounding/fee tolerance before flagging mismatch."},
+                "currency": {"type": "string", "default": "KRW", "description": "Currency code, e.g. KRW or USD."},
+                "trial_client_id": {"type": "string", "description": "Stable id for your agent (X-Trial-Client)."},
+            },
+            "required": ["expected_amount", "actual_amount"],
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "openWorldHint": True},
+    },
+    {
+        "name": "ruler_verify_math",
+        "title": "Reciprocal Ruler - arithmetic check ($0.01 x402 paid)",
+        "description": (
+            "Ultra-low-cost ($0.01 USDC on Base) deterministic arithmetic verification (MATCHED / SHORTFALL / OVERPAID). "
+            "Without payment_header it returns the HTTP 402 challenge; pass the signed x402 payload to complete."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "expected_amount": {"type": "number", "description": "Expected settlement or invoice amount."},
+                "actual_amount": {"type": "number", "description": "Actual settled or charged amount."},
+                "tolerance": {"type": "number", "minimum": 0, "default": 0.0,
+                              "description": "Allowed rounding/fee tolerance."},
+                "currency": {"type": "string", "default": "KRW", "description": "Currency code, e.g. KRW or USD."},
+                "payment_header": {"type": "string", "description": "Signed x402 payment payload (X-PAYMENT)."},
+            },
+            "required": ["expected_amount", "actual_amount"],
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "openWorldHint": True},
+    },
     {
         "name": "ruler_trial_reconcile",
         "title": "Reciprocal Ruler - free trial reconciliation",
@@ -527,6 +646,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
 ]
 
 TOOL_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
+    "ruler_trial_verify_math": tool_ruler_trial_verify_math,
+    "ruler_verify_math": tool_ruler_verify_math,
     "ruler_trial_reconcile": tool_ruler_trial_reconcile,
     "ruler_quote_lock": tool_ruler_quote_lock,
     "ruler_reconcile": tool_ruler_reconcile,

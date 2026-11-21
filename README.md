@@ -2,6 +2,9 @@
 
 > Using n8n instead of an MCP client? [`examples/n8n/`](examples/n8n/) has an importable
 > quote-lock → reconcile workflow.
+> Using Claude Code? [`examples/claude-code/`](examples/claude-code/) has a ready-to-copy `SKILL.md`
+> and `PreToolUse` verification hook.
+> Need a quick human CSV/TSV check? Open <https://reciprocal-ruler-x402.vercel.app/app>.
 
 An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that gives any
 MCP-capable agent — Claude Desktop, Claude Code, Cursor, or your own client — a settlement
@@ -21,6 +24,8 @@ shortfalls out of the agreed holdback. The service is paid per call with
 
 | Tool | Price | What it does |
 |---|---|---|
+| `ruler_trial_verify_math` | free (3 calls/client) | Free trial of the deterministic arithmetic check (`MATCHED`, `SHORTFALL`, `OVERPAID`). |
+| `ruler_verify_math` | $0.01 | Ultra-low-cost deterministic arithmetic check (`expected_amount` vs `actual_amount` with optional tolerance). |
 | `ruler_trial_reconcile` | free (3 calls/client) | Runs the real reconciliation engine and returns the judgment, so you can evaluate it before paying. Not written to the audit ledger. |
 | `ruler_quote_lock` | $0.05 | Locks the terms both agents agreed on and returns a deterministic `quote_hash` they can cite later. |
 | `ruler_reconcile` | $0.25 | Idempotent settlement judgment recorded in an append-only audit ledger; retries with the same `idempotency_key` return the original result instead of charging again. |
