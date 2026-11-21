@@ -1,5 +1,8 @@
 # reciprocal-ruler-mcp
 
+> Using n8n instead of an MCP client? [`examples/n8n/`](examples/n8n/) has an importable
+> quote-lock → reconcile workflow.
+
 An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that gives any
 MCP-capable agent — Claude Desktop, Claude Code, Cursor, or your own client — a settlement
 oracle for agent-to-agent transactions.

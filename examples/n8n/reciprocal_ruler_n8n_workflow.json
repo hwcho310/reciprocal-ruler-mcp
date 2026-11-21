@@ -1,0 +1,643 @@
+{
+  "name": "Reciprocal Ruler — x402 Settlement Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Reciprocal Ruler — x402 정산 자동화\n\n**두 번의 유료 호출로 한 건을 정산합니다**\n1. `POST /v1/quote-lock` ($0.05) — 사전 합의 조건을 SHA-256 해시로 고정\n2. `POST /v1/reconcile` ($0.25) — 실제 정산과 대조해 부분결제·미지급·환불 판정\n\n**처음 3단계**\n1. `1. Sample Event` 노드를 열어 우리 거래 값으로 바꿉니다.\n2. `Manual Trigger` 를 실행합니다.\n3. 402(결제 필요)가 뜨면 가이드의 '결제 붙이기' 절차를 따릅니다.\n\n**결과 경로**\n- `MATCHED` → `8a/8b` 감사 로그 append\n- `EXCEPTION` / `PENDING` / 결제 오류 → `10` 알림(Slack·Email)\n\n각 금액 단위는 KRW 정수입니다.",
+        "height": 560,
+        "width": 520,
+        "color": 4
+      },
+      "id": "6914cd3e-7c55-462f-9703-455ddc034317",
+      "name": "Sticky Note — 사용법",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -980,
+        -260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "06e06154-7426-40f2-a41c-9b9442f4c35a",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        40,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ruler-settlement",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "19650ad9-bc53-404a-8dfd-4e4fed41da2e",
+      "name": "Webhook: Settlement Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        40,
+        240
+      ],
+      "notes": "프로덕션 진입점. POST /webhook/ruler-settlement 로 이벤트를 밀어 넣습니다."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ✏️ 이 노드만 열어서 우리 회사 이벤트 값으로 바꾸면 바로 돌아갑니다.\n// 금액은 모두 KRW 정수입니다.\n// 인보이스·출장 예약/취소·정산 내역 어느 쪽이든 아래 모양으로만 맞추면 됩니다.\nreturn [{\n  json: {\n    // 거래 당사자(에이전트) 식별자 — 자유 문자열\n    buyer_id: 'agent_buyer_01',\n    supplier_id: 'agent_supplier_42',\n\n    // 사전 합의한 규칙 버전 (양쪽이 같아야 quote-lock 성립)\n    buyer_version: '1.0',\n    supplier_version: '1.0',\n\n    // 사전 합의 조건 — 이 값들이 해시로 고정됩니다\n    terms: {\n      price_krw: 220000,\n      currency: 'KRW',\n      free_cancel_until: '2026-11-25T18:00:00+09:00',\n      refund_ratio_on_cancel: 1.0,\n      holdback_ratio: 0.10\n    },\n\n    // 정산 대조 입력\n    tx_id: 'tx_20261121_0001',\n    expected_amount_krw: 220000,\n    actual_settled_krw: 180000,\n    holdback_krw: 22000,\n    // 'POST_TRADE_REFUND' (거래 후 환불/부분결제) 또는 'HALF_OPEN_TIMEOUT' (응답 없는 채 남은 건)\n    event_type: 'POST_TRADE_REFUND'\n  }\n}];"
+      },
+      "id": "ad901500-670f-4f0d-83ff-5aff4d130d3d",
+      "name": "1. Sample Event (edit me)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        40
+      ],
+      "notes": "수동 테스트용 입력. 실제 이벤트 값으로 바꿔 실행하세요."
+    },
+    {
+      "parameters": {
+        "jsCode": "// 입력 이벤트를 두 API 요청 본문으로 정규화하고, 서버가 거절할 값을 먼저 걸러냅니다.\n// (전화·웹훅·수동 어느 경로로 들어와도 이 노드 뒤는 동일합니다.)\nconst items = $input.all();\nconst out = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const e = items[i].json || {};\n  const terms = (e.terms && typeof e.terms === 'object') ? e.terms : {};\n\n  const priceRaw = (e.price_krw !== undefined) ? e.price_krw : terms.price_krw;\n  const price = Number(priceRaw);\n  const expectedRaw = (e.expected_amount_krw !== undefined) ? e.expected_amount_krw : price;\n  const expected = Number(expectedRaw);\n  const actual = Number(e.actual_settled_krw);\n\n  const ratioRaw = (terms.holdback_ratio !== undefined) ? terms.holdback_ratio : 0.1;\n  const ratio = Number(ratioRaw);\n  const holdback = (e.holdback_krw !== undefined && e.holdback_krw !== null && e.holdback_krw !== '')\n    ? Number(e.holdback_krw)\n    : Math.round(expected * (isFinite(ratio) ? ratio : 0.1));\n\n  const missing = [];\n  if (!e.buyer_id) missing.push('buyer_id');\n  if (!e.supplier_id) missing.push('supplier_id');\n  if (!e.tx_id) missing.push('tx_id');\n  if (!isFinite(price)) missing.push('terms.price_krw');\n  if (!isFinite(actual)) missing.push('actual_settled_krw');\n  if (missing.length) {\n    throw new Error('필수 값이 없습니다: ' + missing.join(', '));\n  }\n\n  const buyerVersion = String(e.buyer_version || '1.0');\n  const supplierVersion = String(e.supplier_version || '1.0');\n  if (buyerVersion !== supplierVersion) {\n    throw new Error('buyer_version(' + buyerVersion + ') 과 supplier_version(' + supplierVersion + ') 이 다릅니다. 규칙 버전이 같아야 quote-lock 이 성립합니다.');\n  }\n\n  const eventType = (e.event_type === 'HALF_OPEN_TIMEOUT') ? 'HALF_OPEN_TIMEOUT' : 'POST_TRADE_REFUND';\n  const idemKey = String(e.idempotency_key || ('idem_' + e.tx_id));\n\n  out.push({ json: {\n    quote_lock_body: {\n      buyer_version: buyerVersion,\n      supplier_version: supplierVersion,\n      buyer_id: String(e.buyer_id),\n      supplier_id: String(e.supplier_id),\n      terms: terms\n    },\n    reconcile_body: {\n      idempotency_key: idemKey,\n      tx_id: String(e.tx_id),\n      quote_hash: '',\n      expected_amount_krw: Math.trunc(expected),\n      actual_settled_krw: Math.trunc(actual),\n      holdback_krw: Math.trunc(holdback),\n      event_type: eventType\n    },\n    meta: {\n      tx_id: String(e.tx_id),\n      buyer_id: String(e.buyer_id),\n      supplier_id: String(e.supplier_id),\n      buyer_version: buyerVersion,\n      price_krw: Math.trunc(price),\n      free_cancel_until: terms.free_cancel_until || null,\n      expected_amount_krw: Math.trunc(expected),\n      actual_settled_krw: Math.trunc(actual),\n      holdback_krw: Math.trunc(holdback),\n      event_type: eventType,\n      idempotency_key: idemKey,\n      received_at: new Date().toISOString()\n    }\n  }});\n}\nreturn out;"
+      },
+      "id": "70cd9e16-5a72-40ec-84ac-fac9b5cde475",
+      "name": "2. Normalize & Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        140
+      ],
+      "notes": "두 API 요청 본문을 만들고 필수값·버전 일치를 먼저 검사합니다."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://reciprocal-ruler-x402.vercel.app/v1/quote-lock",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.quote_lock_body) }}",
+        "options": {
+          "timeout": 90000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "909f0d00-977c-4971-b2c4-f256de496e28",
+      "name": "3a. POST /v1/quote-lock ($0.05)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        140
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "notes": "402가 와도 멈추지 않도록 neverError + fullResponse 로 받습니다. 402 처리는 3c/가이드 참고."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2cd7d3a5-9f35-42db-a9f3-72bf34e228e4",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d82f06bb-7b7c-468f-aaf0-413681289202",
+      "name": "3b. quote-lock OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        980,
+        140
+      ],
+      "notes": "200이면 quote_hash 를 받아 reconcile 로, 아니면 3c 로 보냅니다."
+    },
+    {
+      "parameters": {
+        "jsCode": "// 402(결제 필요)·409(버전 불일치)·422(본문 형식)를 사람이 읽는 형태로 풀어 알림 문구를 만듭니다.\nfunction decodeBase64Json(value) {\n  try {\n    let text = '';\n    if (typeof Buffer !== 'undefined') {\n      text = Buffer.from(value, 'base64').toString('utf8');\n    } else if (typeof atob === 'function') {\n      const bin = atob(value);\n      const bytes = new Uint8Array(bin.length);\n      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);\n      text = new TextDecoder('utf-8').decode(bytes);\n    } else {\n      return null;\n    }\n    return JSON.parse(text);\n  } catch (err) {\n    return null;\n  }\n}\n\nconst items = $input.all();\nconst out = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const res = items[i].json || {};\n  const body = res.body || {};\n  const headers = res.headers || {};\n  const raw = headers['payment-required'] || headers['PAYMENT-REQUIRED'];\n  const required = raw ? decodeBase64Json(raw) : null;\n  const accept = (required && required.accepts && required.accepts.length) ? required.accepts[0] : null;\n\n  let reason = 'HTTP ' + res.statusCode;\n  if (body && body.error) reason = String(body.error);\n  if (body && body.detail && body.detail.error) reason = String(body.detail.error);\n  if (required && required.error) reason = String(required.error);\n\n  const amountUsd = accept ? (Number(accept.amount) / 1000000).toFixed(2) : null;\n\n  const lines = [\n    'Reciprocal Ruler · quote-lock 실패 [' + res.statusCode + ' ' + reason + ']'\n  ];\n  if (accept) {\n    lines.push('- 결제 요구: ' + amountUsd + ' USDC on ' + accept.network + ' → ' + accept.payTo);\n  }\n  if (res.statusCode === 402) {\n    lines.push('- 원인: x402 유료 엔드포인트입니다. 결제 서명(PAYMENT-SIGNATURE)이 없거나 지갑 잔액이 부족합니다.');\n    lines.push('- 조치: 결제 릴레이(x402 payer)를 거치도록 이 HTTP 노드 URL을 바꾸거나, Base USDC 지갑으로 서명한 헤더를 붙여 다시 보내세요.');\n  }\n  if (res.statusCode === 409) {\n    lines.push('- 원인: 두 에이전트의 규칙 버전이 다릅니다. buyer_version 과 supplier_version 을 맞추세요.');\n  }\n  if (res.statusCode === 422) {\n    lines.push('- 원인: 요청 본문 형식 오류입니다. 필드 이름·타입(int/string)을 확인하세요.');\n  }\n  if (res.statusCode >= 500) {\n    lines.push('- 원인: 서버 오류입니다. 무료 호스팅 콜드 스타트(수십 초)일 수 있으니 잠시 뒤 재시도하세요.');\n  }\n\n  out.push({ json: {\n    stage: 'quote-lock',\n    status_code: res.statusCode,\n    reason: reason,\n    payment_required: accept ? {\n      network: accept.network,\n      asset: accept.asset,\n      amount_atomic: accept.amount,\n      amount_usd: amountUsd,\n      pay_to: accept.payTo,\n      max_timeout_seconds: accept.maxTimeoutSeconds\n    } : null,\n    alert_text: lines.join('\\n')\n  }});\n}\nreturn out;"
+      },
+      "id": "75570d99-275f-4cb3-bf50-4913e2a071b0",
+      "name": "3c. quote-lock 402/Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        360
+      ],
+      "notes": "PAYMENT-REQUIRED 헤더를 디코드해 결제 요구 금액·지갑·원인을 알림 문구로 만듭니다."
+    },
+    {
+      "parameters": {
+        "jsCode": "// quote-lock 응답에서 quote_hash 를 꺼내 reconcile 본문에 붙입니다.\n// 결제가 성사됐다면 PAYMENT-RESPONSE 헤더에 정산 영수증이 함께 옵니다.\nfunction decodeBase64Json(value) {\n  try {\n    let text = '';\n    if (typeof Buffer !== 'undefined') {\n      text = Buffer.from(value, 'base64').toString('utf8');\n    } else if (typeof atob === 'function') {\n      const bin = atob(value);\n      const bytes = new Uint8Array(bin.length);\n      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);\n      text = new TextDecoder('utf-8').decode(bytes);\n    } else {\n      return null;\n    }\n    return JSON.parse(text);\n  } catch (err) {\n    return null;\n  }\n}\n\nconst inputs = $input.all();\nconst normItems = $('2. Normalize & Validate').all();\nconst out = [];\n\nfor (let i = 0; i < inputs.length; i++) {\n  const res = inputs[i].json || {};\n  const body = res.body || {};\n  const headers = res.headers || {};\n  const norm = ((normItems[i] || {}).json) || {};\n  const meta = norm.meta || {};\n  const base = norm.reconcile_body || {};\n\n  const quoteHash = body.quote_hash || '';\n  const reconcileBody = Object.assign({}, base, { quote_hash: quoteHash });\n\n  const receiptHeader = headers['payment-response'] || headers['PAYMENT-RESPONSE'];\n  const receipt = receiptHeader ? decodeBase64Json(receiptHeader) : null;\n\n  out.push({ json: {\n    quote_lock: {\n      status: body.status || null,\n      quote_hash: quoteHash,\n      rule_version: body.rule_version || null,\n      locked_at: body.locked_at || null\n    },\n    payment_receipt: receipt,\n    reconcile_body: reconcileBody,\n    meta: meta\n  }});\n}\n\nif (out.length === 0) {\n  throw new Error('quote-lock 응답이 비어 있습니다.');\n}\nif (!out[0].json.quote_lock.quote_hash) {\n  throw new Error('quote-lock 응답에 quote_hash 가 없습니다. 3c 노드의 오류 내용을 확인하세요.');\n}\nreturn out;"
+      },
+      "id": "9a91a71c-206f-4c03-9b78-d05dd2a0677d",
+      "name": "4. Attach quote_hash",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        40
+      ],
+      "notes": "quote-lock 결과의 quote_hash 를 reconcile 본문에 그대로 넣습니다."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://reciprocal-ruler-x402.vercel.app/v1/reconcile",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.reconcile_body) }}",
+        "options": {
+          "timeout": 90000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "c8c9963a-dc16-4d19-8ae9-06e92207a170",
+      "name": "5a. POST /v1/reconcile ($0.25)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        40
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "notes": "같은 idempotency_key 로 다시 보내면 중복 정산 없이 이전 판정이 재생됩니다."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cd0db08f-9a1c-4f0c-9591-541bb5550a32",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "131e640c-f619-48a1-911d-46c324c347b9",
+      "name": "5b. reconcile OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// reconcile 실패(402/422/5xx)를 풀어 알림 문구를 만듭니다.\nfunction decodeBase64Json(value) {\n  try {\n    let text = '';\n    if (typeof Buffer !== 'undefined') {\n      text = Buffer.from(value, 'base64').toString('utf8');\n    } else if (typeof atob === 'function') {\n      const bin = atob(value);\n      const bytes = new Uint8Array(bin.length);\n      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);\n      text = new TextDecoder('utf-8').decode(bytes);\n    } else {\n      return null;\n    }\n    return JSON.parse(text);\n  } catch (err) {\n    return null;\n  }\n}\n\nconst items = $input.all();\nconst prevItems = $('4. Attach quote_hash').all();\nconst out = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const res = items[i].json || {};\n  const body = res.body || {};\n  const headers = res.headers || {};\n  const prev = ((prevItems[i] || {}).json) || {};\n  const meta = prev.meta || {};\n  const raw = headers['payment-required'] || headers['PAYMENT-REQUIRED'];\n  const required = raw ? decodeBase64Json(raw) : null;\n  const accept = (required && required.accepts && required.accepts.length) ? required.accepts[0] : null;\n\n  let reason = 'HTTP ' + res.statusCode;\n  if (body && body.error) reason = String(body.error);\n  if (body && body.detail && body.detail.error) reason = String(body.detail.error);\n  if (body && body.detail && !body.detail.error && typeof body.detail === 'string') reason = body.detail;\n  if (required && required.error) reason = String(required.error);\n\n  const amountUsd = accept ? (Number(accept.amount) / 1000000).toFixed(2) : null;\n\n  const lines = [\n    'Reciprocal Ruler · reconcile 실패 [' + res.statusCode + ' ' + reason + ']',\n    '- tx_id: ' + (meta.tx_id || '(알 수 없음)') + ' / 기대금액: ' + meta.expected_amount_krw + ' KRW'\n  ];\n  if (accept) {\n    lines.push('- 결제 요구: ' + amountUsd + ' USDC on ' + accept.network + ' → ' + accept.payTo);\n  }\n  if (res.statusCode === 402) {\n    lines.push('- 원인: 결제 서명이 없거나 지갑 잔액 부족. 같은 본문으로 결제 포함 재요청이 필요합니다.');\n  }\n  if (res.statusCode === 422) {\n    lines.push('- 원인: 본문 형식 오류. quote_hash 가 quote-lock 응답값인지, 금액이 정수인지 확인하세요.');\n  }\n  if (res.statusCode >= 500) {\n    lines.push('- 원인: 서버 오류(콜드 스타트 가능). 잠시 뒤 같은 idempotency_key 로 재시도하세요.');\n  }\n\n  out.push({ json: {\n    stage: 'reconcile',\n    status_code: res.statusCode,\n    reason: reason,\n    tx_id: meta.tx_id || null,\n    alert_text: lines.join('\\n')\n  }});\n}\nreturn out;"
+      },
+      "id": "a16ec714-88d8-4e08-b8cb-552275720021",
+      "name": "5c. reconcile 402/Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// reconcile 응답 상태를 판정으로 바꿉니다.\n//   SETTLED_OK              → 일치(MATCHED)                    → 감사 로그\n//   COMPENSATED             → 부분결제·환불, 유보금으로 보전   → 알림\n//   PENDING_RECONCILIATION  → 미지급(대조 대기)                → 알림\nfunction decodeBase64Json(value) {\n  try {\n    let text = '';\n    if (typeof Buffer !== 'undefined') {\n      text = Buffer.from(value, 'base64').toString('utf8');\n    } else if (typeof atob === 'function') {\n      const bin = atob(value);\n      const bytes = new Uint8Array(bin.length);\n      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);\n      text = new TextDecoder('utf-8').decode(bytes);\n    } else {\n      return null;\n    }\n    return JSON.parse(text);\n  } catch (err) {\n    return null;\n  }\n}\n\n// 3자리 콤마 (로케일과 무관하게 같은 문구가 나오도록 직접 만든다)\nfunction fmtKrw(n) {\n  const v = Math.round(Number(n) || 0);\n  return String(v).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');\n}\n\nconst STATES = {\n  SETTLED_OK: { verdict: 'MATCHED', action: 'audit', label: '정상 일치' },\n  COMPENSATED: { verdict: 'EXCEPTION', action: 'alert', label: '부분결제 · 유보금 보전' },\n  PENDING_RECONCILIATION: { verdict: 'PENDING', action: 'alert', label: '미지급 · 대조 대기' }\n};\n\nconst items = $input.all();\nconst prevItems = $('4. Attach quote_hash').all();\nconst out = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const res = items[i].json || {};\n  const body = res.body || {};\n  const headers = res.headers || {};\n  const prev = ((prevItems[i] || {}).json) || {};\n  const meta = prev.meta || {};\n  const quote = prev.quote_lock || {};\n\n  const state = body.status || 'UNKNOWN';\n  const rule = STATES[state] || { verdict: 'UNKNOWN', action: 'alert', label: '알 수 없는 상태' };\n\n  let receipt = prev.payment_receipt || null;\n  const receiptHeader = headers['payment-response'] || headers['PAYMENT-RESPONSE'];\n  if (receiptHeader) {\n    const decoded = decodeBase64Json(receiptHeader);\n    if (decoded) receipt = decoded;\n  }\n\n  const expected = Number(meta.expected_amount_krw || 0);\n  const actual = Number(meta.actual_settled_krw || 0);\n  const shortfall = expected - actual;\n  const compensated = Number(body.compensated_krw || 0);\n  const uncovered = Number(body.uncovered_krw || 0);\n\n  const record = {\n    recorded_at: new Date().toISOString(),\n    tx_id: body.tx_id || meta.tx_id || null,\n    idempotency_key: meta.idempotency_key || null,\n    quote_hash: quote.quote_hash || null,\n    rule_version: quote.rule_version || null,\n    buyer_id: meta.buyer_id || null,\n    supplier_id: meta.supplier_id || null,\n    event_type: meta.event_type || null,\n    expected_amount_krw: expected,\n    actual_settled_krw: actual,\n    shortfall_krw: shortfall > 0 ? shortfall : 0,\n    holdback_krw: Number(meta.holdback_krw || 0),\n    state: state,\n    verdict: rule.verdict,\n    action: rule.action,\n    compensated_krw: compensated,\n    uncovered_krw: uncovered,\n    credit_delta: Number(body.credit_delta || 0),\n    idempotent_replay: body.idempotent_replay === true,\n    payment_payer: receipt ? (receipt.payer || null) : null,\n    payment_tx: receipt ? (receipt.transaction || null) : null,\n    payment_network: receipt ? (receipt.network || null) : null\n  };\n\n  const lines = [];\n  if (rule.verdict === 'MATCHED') {\n    lines.push('Reciprocal Ruler · 정산 일치');\n  } else {\n    lines.push('Reciprocal Ruler · 정산 예외 — ' + rule.label);\n  }\n  lines.push('- tx_id: ' + record.tx_id);\n  lines.push('- 상태: ' + state + (record.idempotent_replay ? ' (멱등 재생)' : ''));\n  lines.push('- 기대 / 실제: ' + fmtKrw(expected) + ' / ' + fmtKrw(actual) + ' KRW');\n  if (shortfall > 0) lines.push('- 부족액: ' + fmtKrw(shortfall) + ' KRW');\n  lines.push('- 유보금 보전: ' + fmtKrw(compensated) + ' KRW / 미보전: ' + fmtKrw(uncovered) + ' KRW');\n  lines.push('- 신용 변화(credit_delta): ' + record.credit_delta);\n  if (record.payment_tx) lines.push('- 결제 영수증 tx: ' + record.payment_tx);\n\n  const merged = Object.assign({}, record, { alert_text: lines.join('\\n') });\n  out.push({ json: merged });\n}\nreturn out;"
+      },
+      "id": "d803d17a-f1b7-41ea-a141-f72b903d7655",
+      "name": "6. Classify Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        -40
+      ],
+      "notes": "SETTLED_OK → MATCHED, COMPENSATED/PENDING → 예외. 결제 영수증(PAYMENT-RESPONSE)도 여기서 합칩니다."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a604c2a8-d6ba-4cad-9ef1-7a52b384c18e",
+              "leftValue": "={{ $json.verdict }}",
+              "rightValue": "MATCHED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "aeb8130e-ecc8-4f86-869b-c32f98555b62",
+      "name": "7. MATCHED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2140,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 정상 일치 건을 append-only 감사 로그 한 줄로 만듭니다.\n// audit_line 은 탭 구분 — Google Sheets / Data Table / 자체 로그에 그대로 append 하세요.\nconst items = $input.all();\nconst out = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const r = items[i].json || {};\n  const cols = [\n    r.recorded_at, r.tx_id, r.quote_hash, r.rule_version,\n    r.buyer_id, r.supplier_id, r.event_type,\n    r.expected_amount_krw, r.actual_settled_krw, r.shortfall_krw,\n    r.state, r.compensated_krw, r.uncovered_krw, r.credit_delta,\n    r.payment_tx || ''\n  ];\n  out.push({ json: Object.assign({}, r, {\n    audit_line: cols.join('\\t'),\n    audit_status: 'APPEND'\n  }) });\n}\nreturn out;"
+      },
+      "id": "502ef1f7-616e-4168-8b4a-0e91e751c5b3",
+      "name": "8a. Audit Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        -180
+      ],
+      "notes": "정상 일치 건을 append-only 한 줄로 만듭니다."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://audit.example.com/ruler/settlement-log",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "50533e41-a787-446a-bd66-eff76f3db600",
+      "name": "8b. Audit Log Append (placeholder)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2620,
+        -180
+      ],
+      "disabled": true,
+      "notes": "감사 로그 저장소 자리표시자. Google Sheets / Data Table 노드로 바꾸거나 우리 엔드포인트 URL 을 넣고 활성화하세요."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "text": "={{ $json.alert_text }}",
+        "otherOptions": {}
+      },
+      "id": "14909cb1-dd21-48a0-a1d2-c4ab6d099d1c",
+      "name": "10. Slack Alert (placeholder)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        2380,
+        40
+      ],
+      "disabled": true,
+      "notes": "Slack 자리표시자. 채널을 고르고 Slack 자격증명을 연결한 뒤 활성화하세요."
+    },
+    {
+      "parameters": {
+        "fromEmail": "ruler-alerts@example.com",
+        "toEmail": "ops@example.com",
+        "subject": "={{ 'Reciprocal Ruler 정산 알림: ' + ($json.stage || $json.state || 'event') }}",
+        "emailFormat": "text",
+        "text": "={{ $json.alert_text }}",
+        "options": {}
+      },
+      "id": "3e8c07f5-7f13-46ce-8292-ee7e3dc3fe54",
+      "name": "10b. Email Alert (placeholder)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2380,
+        220
+      ],
+      "disabled": true,
+      "notes": "Email 자리표시자. SMTP 자격증명과 수신 주소를 넣고 활성화하세요."
+    },
+    {
+      "parameters": {
+        "content": "### 402 Payment Required 가 뜨면\n\n이 API 는 x402 유료 엔드포인트입니다. n8n 기본 HTTP Request 노드는 **결제 서명을 만들지 못합니다.**\n\n**가장 빠른 길** — 결제 릴레이(가이드 5장)를 띄우고 아래 두 노드의 URL 만 바꿉니다.\n- `3a` → `http://<relay>/v1/quote-lock`\n- `5a` → `http://<relay>/v1/reconcile`\n\n릴레이는 402를 받으면 Base USDC 로 서명해 자동 재요청하고, 응답을 그대로 돌려줍니다. 본문·판정 로직은 하나도 바꿀 필요가 없습니다.",
+        "height": 360,
+        "width": 460,
+        "color": 3
+      },
+      "id": "075dda93-7a2f-41a6-aa2d-67828d3fa6ed",
+      "name": "Sticky Note — 402 결제",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        470
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 요청/응답 계약 (서버 스펙 그대로)\n\n**quote-lock** `{buyer_version, supplier_version, buyer_id, supplier_id, terms}`\n→ `{status:\"QUOTE_LOCKED\", quote_hash, rule_version, locked_at}` · 불일치 시 409\n\n**reconcile** `{idempotency_key, tx_id, quote_hash, expected_amount_krw, actual_settled_krw, holdback_krw, event_type}`\n→ `{status, idempotent_replay, tx_id, compensated_krw, uncovered_krw, credit_delta}`\n\n`event_type`: `POST_TRADE_REFUND` | `HALF_OPEN_TIMEOUT`\n`holdback_krw` 는 **생략하면 22,000 으로 들어갑니다** — 항상 명시하세요.",
+        "height": 340,
+        "width": 560,
+        "color": 5
+      },
+      "id": "8d1e4fcf-0b7a-494e-a933-03fb050fe20f",
+      "name": "Sticky Note — 데이터 계약",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        700,
+        560
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "1. Sample Event (edit me)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Sample Event (edit me)": {
+      "main": [
+        [
+          {
+            "node": "2. Normalize & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: Settlement Event": {
+      "main": [
+        [
+          {
+            "node": "2. Normalize & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Normalize & Validate": {
+      "main": [
+        [
+          {
+            "node": "3a. POST /v1/quote-lock ($0.05)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3a. POST /v1/quote-lock ($0.05)": {
+      "main": [
+        [
+          {
+            "node": "3b. quote-lock OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3b. quote-lock OK?": {
+      "main": [
+        [
+          {
+            "node": "4. Attach quote_hash",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "3c. quote-lock 402/Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3c. quote-lock 402/Error": {
+      "main": [
+        [
+          {
+            "node": "10. Slack Alert (placeholder)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "10b. Email Alert (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Attach quote_hash": {
+      "main": [
+        [
+          {
+            "node": "5a. POST /v1/reconcile ($0.25)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5a. POST /v1/reconcile ($0.25)": {
+      "main": [
+        [
+          {
+            "node": "5b. reconcile OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5b. reconcile OK?": {
+      "main": [
+        [
+          {
+            "node": "6. Classify Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "5c. reconcile 402/Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5c. reconcile 402/Error": {
+      "main": [
+        [
+          {
+            "node": "10. Slack Alert (placeholder)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "10b. Email Alert (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Classify Result": {
+      "main": [
+        [
+          {
+            "node": "7. MATCHED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. MATCHED?": {
+      "main": [
+        [
+          {
+            "node": "8a. Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "10. Slack Alert (placeholder)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "10b. Email Alert (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8a. Audit Record": {
+      "main": [
+        [
+          {
+            "node": "8b. Audit Log Append (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d99df289-ef14-4267-a0b5-954d4f3908a5",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": []
+}
