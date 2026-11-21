@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "reciprocal-ruler": {
+      "command": "python3",
+      "args": ["-m", "reciprocal_ruler_mcp"],
+      "env": {
+        "RULER_API_BASE": "https://reciprocla-ruler-x402.onrender.com",
+        "RULER_TRIAL_CLIENT_ID": "my-agent-01"
+      }
+    }
+  }
+}
