@@ -131,6 +131,27 @@ The server is a single standard-library module, so a checkout works directly:
 }
 ```
 
+### One-click install (MCPB bundle)
+
+Every release also ships a `.mcpb` bundle, the package format Claude Desktop and other
+hosts open in one click (Linux, macOS, Windows):
+
+```bash
+python3 scripts/build_mcpb.py          # -> dist/reciprocal-ruler-mcp.mcpb
+```
+
+Or take the bundle from the latest release:
+<https://github.com/hwcho310/reciprocal-ruler-mcp/releases/latest/download/reciprocal-ruler-mcp.mcpb>
+
+The bundle needs `python3` on the machine and nothing else — the server has no dependencies.
+
+## Registries
+
+| Registry | Entry |
+|---|---|
+| Official MCP Registry | `io.github.hwcho310/reciprocal-ruler-mcp` (published from `server.json` by `.github/workflows/publish-mcp.yml` on a `v*` tag) |
+| Glama | <https://glama.ai/mcp/servers/hwcho310/reciprocal-ruler-mcp> |
+
 ## Configuration
 
 | Environment variable | Default | Purpose |

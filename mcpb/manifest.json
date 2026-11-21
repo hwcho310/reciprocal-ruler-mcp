@@ -1,0 +1,72 @@
+{
+  "manifest_version": "0.3",
+  "name": "reciprocal-ruler-mcp",
+  "display_name": "Reciprocal Ruler",
+  "version": "0.1.0",
+  "description": "Settlement oracle for agent-to-agent transactions: lock agreed terms into a deterministic quote_hash, then judge the settlement (SETTLED_OK / COMPENSATED / PENDING_RECONCILIATION) and compensate shortfalls from the agreed holdback. Paid per call over x402 in USDC on Base; the first 3 evaluations are free.",
+  "long_description": "Reciprocal Ruler is the third party two agents call when they cannot agree on *what must be proven before money moves*.\n\n- `ruler_trial_reconcile` (free, 3 calls per client) runs the real reconciliation engine so you can evaluate it before paying.\n- `ruler_quote_lock` ($0.05 USDC on Base) locks the terms both agents agreed on and returns a deterministic `quote_hash` they can cite later.\n- `ruler_reconcile` ($0.25 USDC on Base) returns an idempotent settlement judgment recorded in an append-only audit ledger.\n\nAmounts are KRW integers. The server holds no wallet and signs nothing: a paid tool without a payment returns the HTTP 402 x402 challenge decoded for you, and the call completes when the signed payload is passed back as `payment_header`.",
+  "author": {
+    "name": "Reciprocal Ruler",
+    "url": "https://reciprocal-ruler-x402.vercel.app"
+  },
+  "homepage": "https://reciprocal-ruler-x402.vercel.app",
+  "documentation": "https://reciprocal-ruler-x402.vercel.app/docs",
+  "support": "https://github.com/hwcho310/reciprocal-ruler-mcp/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hwcho310/reciprocal-ruler-mcp"
+  },
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "x402",
+    "agents",
+    "settlement",
+    "reconciliation",
+    "escrow",
+    "usdc",
+    "base",
+    "payments"
+  ],
+  "server": {
+    "type": "python",
+    "entry_point": "src/reciprocal_ruler_mcp/server.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": ["-u", "${__dirname}/src/reciprocal_ruler_mcp/server.py"],
+      "env": {
+        "RULER_API_BASE": "https://reciprocal-ruler-x402.vercel.app",
+        "RULER_TRIAL_CLIENT_ID": "${user_config.trial_client_id}"
+      }
+    }
+  },
+  "user_config": {
+    "trial_client_id": {
+      "type": "string",
+      "title": "Trial client id",
+      "description": "A stable id for your agent (sent as X-Trial-Client) so the 3 free evaluation calls follow this id instead of the shared IP address. Optional.",
+      "required": false,
+      "default": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "ruler_trial_reconcile",
+      "description": "Free settlement reconciliation (3 calls per client): compares the expected amount with what actually settled and returns SETTLED_OK, COMPENSATED or PENDING_RECONCILIATION."
+    },
+    {
+      "name": "ruler_quote_lock",
+      "description": "Paid ($0.05 USDC on Base via x402): locks the agreed trade terms and returns a deterministic quote_hash both agents can cite later."
+    },
+    {
+      "name": "ruler_reconcile",
+      "description": "Paid ($0.25 USDC on Base via x402): idempotent settlement judgment written to an append-only audit ledger."
+    }
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {
+      "python": ">=3.9"
+    }
+  }
+}

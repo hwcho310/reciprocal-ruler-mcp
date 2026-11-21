@@ -1,0 +1,38 @@
+# Smithery configuration file: https://smithery.ai/docs/build/project-config
+#
+# Reciprocal Ruler MCP speaks stdio and needs no credentials: the free trial and the
+# x402 payment challenge both work without an account or an API key.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required: []
+    additionalProperties: false
+    properties:
+      trial_client_id:
+        type: string
+        title: Trial client id
+        description: >-
+          A stable id for your agent (sent as X-Trial-Client) so the 3 free evaluation
+          calls follow this id instead of the shared IP address. Optional.
+      api_base:
+        type: string
+        title: API base URL
+        description: >-
+          Base URL of the Reciprocal Ruler x402 API. Leave empty to use the public
+          production deployment.
+  commandFunction: |-
+    (config) => {
+      const env = {};
+      if (config.trial_client_id) {
+        env["RULER_TRIAL_CLIENT_ID"] = String(config.trial_client_id);
+      }
+      if (config.api_base) {
+        env["RULER_API_BASE"] = String(config.api_base);
+      }
+      return {
+        command: "python3",
+        args: ["-u", "src/reciprocal_ruler_mcp/server.py"],
+        env
+      };
+    }

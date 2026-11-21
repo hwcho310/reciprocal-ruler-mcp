@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.hwcho310/reciprocal-ruler-mcp",
+  "title": "Reciprocal Ruler",
+  "description": "Settlement oracle for AI-agent trades: lock a quote, reconcile shortfalls via holdback.",
+  "version": "0.1.0",
+  "websiteUrl": "https://reciprocal-ruler-x402.vercel.app",
+  "repository": {
+    "url": "https://github.com/hwcho310/reciprocal-ruler-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/hwcho310/reciprocal-ruler-mcp/releases/download/v0.1.0/reciprocal-ruler-mcp.mcpb",
+      "fileSha256": "d12da1ff98b4b22ffb4c72f5e495a52318266d05feeff3bad832bf1bd8a95a0b",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "RULER_API_BASE",
+          "description": "Base URL of the Reciprocal Ruler x402 API. Defaults to the public production deployment.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "RULER_TRIAL_CLIENT_ID",
+          "description": "Stable id for your agent, sent as X-Trial-Client, so the 3 free evaluation calls follow this id instead of the shared IP address.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
